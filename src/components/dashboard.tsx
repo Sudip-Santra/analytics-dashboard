@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { subDays, format } from "date-fns";
 import type { DateRange } from "react-day-picker";
 import {
@@ -18,7 +19,10 @@ import {
   TrendingUp,
   Activity,
   BarChart3,
+  LogOut,
+  X,
 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -37,13 +41,9 @@ import {
   ChartTooltip,
   ChartTooltipContent,
 } from "@/components/ui/chart";
-import {
-  mockData,
-  getFilteredData,
-  aggregateByFeature,
-  aggregateByDay,
-} from "@/lib/mock-data";
 import { cn } from "@/lib/utils";
+import { logout } from "@/services/auth";
+import { fetchAnalytics, trackFeatureClick, type FeatureData, type DailyData } from "@/services/analytics";
 
 const FEATURE_COLORS: Record<string, string> = {
   date_picker: "var(--chart-1)",
@@ -82,37 +82,134 @@ const STAT_CARDS = [
   { gradient: "from-violet-500/10 to-purple-500/10", iconBg: "bg-violet-500/10", iconColor: "text-violet-600" },
 ];
 
+function getCookie(name: string): string | null {
+  const match = document.cookie.match(new RegExp("(^| )" + name + "=([^;]+)"));
+  return match ? decodeURIComponent(match[2]) : null;
+}
+
+function setCookie(name: string, value: string, days: number) {
+  const expires = new Date(Date.now() + days * 864e5).toUTCString();
+  document.cookie = `${name}=${encodeURIComponent(value)}; expires=${expires}; path=/`;
+}
+
+function loadFiltersFromCookies() {
+  const saved = getCookie("dashboard_filters");
+  if (!saved) return null;
+  try {
+    return JSON.parse(saved);
+  } catch {
+    return null;
+  }
+}
+
+function saveFiltersToCookies(filters: { dateFrom: string; dateTo: string; age: string; gender: string }) {
+  setCookie("dashboard_filters", JSON.stringify(filters), 30);
+}
+
 export default function Dashboard() {
+  const navigate = useNavigate();
+
+  const savedFilters = useMemo(() => loadFiltersFromCookies(), []);
+
   const [dateRange, setDateRange] = useState<DateRange | undefined>({
-    from: subDays(new Date(), 90),
-    to: new Date(),
+    from: savedFilters?.dateFrom ? new Date(savedFilters.dateFrom) : subDays(new Date(), 90),
+    to: savedFilters?.dateTo ? new Date(savedFilters.dateTo) : new Date(),
   });
-  const [ageFilter, setAgeFilter] = useState("all");
-  const [genderFilter, setGenderFilter] = useState("all");
+  const [ageFilter, setAgeFilter] = useState(savedFilters?.age || "all");
+  const [genderFilter, setGenderFilter] = useState(savedFilters?.gender || "all");
   const [selectedFeature, setSelectedFeature] = useState<string | null>(null);
 
-  const filteredData = useMemo(() => {
-    if (!dateRange?.from || !dateRange?.to) return mockData;
-    return getFilteredData(mockData, {
-      dateRange: { from: dateRange.from, to: dateRange.to },
+  const [featureData, setFeatureData] = useState<FeatureData[]>([]);
+  const [dailyData, setDailyData] = useState<DailyData[]>([]);
+  const [totalClicks, setTotalClicks] = useState(0);
+  const [uniqueUsers, setUniqueUsers] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  // Track interaction
+  const trackClick = useCallback(async (featureName: string) => {
+    try {
+      await trackFeatureClick(featureName);
+    } catch {
+      // silent — tracking should not disrupt UX
+    }
+  }, []);
+
+  // Base filters object
+  const baseFilters = useCallback(() => ({
+    startDate: dateRange?.from?.toISOString(),
+    endDate: dateRange?.to?.toISOString(),
+    age: ageFilter,
+    gender: genderFilter,
+  }), [dateRange, ageFilter, genderFilter]);
+
+  const formatDaily = (daily: DailyData[]) =>
+    daily.map((d) => ({ date: format(new Date(d.date), "MMM dd"), clicks: d.clicks }));
+
+  // Fetch features + stats (no feature filter)
+  const fetchOverview = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await fetchAnalytics(baseFilters());
+      setFeatureData(data.features);
+      setTotalClicks(data.stats.total_clicks);
+      setUniqueUsers(data.stats.unique_users);
+      if (!selectedFeature) {
+        setDailyData(formatDaily(data.daily));
+      }
+    } catch (err: unknown) {
+      const error = err as { status?: number };
+      if (error?.status === 401) {
+        toast.error("Session expired. Please login again.");
+        navigate("/login");
+        return;
+      }
+      toast.error("Cannot connect to server");
+    } finally {
+      setLoading(false);
+    }
+  }, [baseFilters, selectedFeature, navigate]);
+
+  // Fetch daily data filtered by selected feature
+  const fetchDailyForFeature = useCallback(async () => {
+    if (!selectedFeature) return;
+    try {
+      const data = await fetchAnalytics({ ...baseFilters(), feature: selectedFeature });
+      setDailyData(formatDaily(data.daily));
+    } catch {
+      // silent
+    }
+  }, [baseFilters, selectedFeature]);
+
+  // Re-fetch overview when filters change
+  useEffect(() => { fetchOverview(); }, [fetchOverview]);
+  // Re-fetch daily when selected feature changes
+  useEffect(() => { fetchDailyForFeature(); }, [fetchDailyForFeature]);
+
+  // Save filters to cookies whenever they change
+  useEffect(() => {
+    saveFiltersToCookies({
+      dateFrom: dateRange?.from?.toISOString() || "",
+      dateTo: dateRange?.to?.toISOString() || "",
       age: ageFilter,
       gender: genderFilter,
     });
   }, [dateRange, ageFilter, genderFilter]);
 
-  const featureData = useMemo(() => aggregateByFeature(filteredData), [filteredData]);
-  const dailyData = useMemo(
-    () => aggregateByDay(filteredData, selectedFeature ?? undefined),
-    [filteredData, selectedFeature]
-  );
-
-  const totalClicks = filteredData.length;
-  const uniqueUsers = new Set(filteredData.map((r) => r.userId)).size;
   const topFeature = featureData[0]?.feature ?? "N/A";
   const avgDaily =
     dailyData.length > 0
       ? Math.round(dailyData.reduce((s, d) => s + d.clicks, 0) / dailyData.length)
       : 0;
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch {
+      // continue logout even if request fails
+    }
+    toast.success("Logged out");
+    navigate("/login");
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -128,10 +225,16 @@ export default function Dashboard() {
               <p className="text-xs text-muted-foreground">Real-time usage dashboard</p>
             </div>
           </div>
-          <Badge variant="outline" className="text-xs">
-            <span className="size-1.5 rounded-full bg-emerald-500 mr-1.5 animate-pulse" />
-            Live
-          </Badge>
+          <div className="flex items-center gap-3">
+            <Badge variant="outline" className="text-xs">
+              <span className="size-1.5 rounded-full bg-emerald-500 mr-1.5 animate-pulse" />
+              Live
+            </Badge>
+            <Button variant="destructive" size="sm" onClick={handleLogout}>
+              <LogOut className="size-4 mr-1.5" />
+              Logout
+            </Button>
+          </div>
         </div>
       </header>
 
@@ -155,6 +258,7 @@ export default function Dashboard() {
                         "w-70 justify-start text-left font-normal",
                         !dateRange && "text-muted-foreground"
                       )}
+                      onClick={() => trackClick("date_picker")}
                     >
                       {dateRange?.from ? (
                         dateRange.to ? (
@@ -188,7 +292,7 @@ export default function Dashboard() {
                   <Users className="size-3.5" />
                   Age Group
                 </label>
-                <Select value={ageFilter} onValueChange={setAgeFilter}>
+                <Select value={ageFilter} onValueChange={(v) => { setAgeFilter(v); trackClick("filter_age"); }}>
                   <SelectTrigger className="w-40">
                     <SelectValue placeholder="All Ages" />
                   </SelectTrigger>
@@ -207,7 +311,7 @@ export default function Dashboard() {
                   <Users className="size-3.5" />
                   Gender
                 </label>
-                <Select value={genderFilter} onValueChange={setGenderFilter}>
+                <Select value={genderFilter} onValueChange={(v) => { setGenderFilter(v); trackClick("filter_gender"); }}>
                   <SelectTrigger className="w-40">
                     <SelectValue placeholder="All Genders" />
                   </SelectTrigger>
@@ -219,6 +323,21 @@ export default function Dashboard() {
                   </SelectContent>
                 </Select>
               </div>
+
+              {/* Clear All Filters */}
+              <Button
+                variant="destructive"
+                size="lg"
+                onClick={() => {
+                  setDateRange({ from: subDays(new Date(), 90), to: new Date() });
+                  setAgeFilter("all");
+                  setGenderFilter("all");
+                  setSelectedFeature(null);
+                }}
+              >
+                <X className="size-4 mr-1.5" />
+                Clear All Filters
+              </Button>
             </div>
           </div>
         </div>
@@ -235,7 +354,7 @@ export default function Dashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{totalClicks.toLocaleString()}</div>
+              <div className="text-2xl font-bold">{loading ? "—" : totalClicks.toLocaleString()}</div>
               <p className="text-xs text-muted-foreground mt-1">In selected period</p>
             </CardContent>
           </Card>
@@ -249,7 +368,7 @@ export default function Dashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{uniqueUsers}</div>
+              <div className="text-2xl font-bold">{loading ? "—" : uniqueUsers}</div>
               <p className="text-xs text-muted-foreground mt-1">Active in period</p>
             </CardContent>
           </Card>
@@ -264,7 +383,7 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {FEATURE_LABELS[topFeature] ?? topFeature}
+                {loading ? "—" : (FEATURE_LABELS[topFeature] ?? topFeature)}
               </div>
               <p className="text-xs text-muted-foreground mt-1">
                 {featureData[0]?.clicks ?? 0} clicks
@@ -281,7 +400,7 @@ export default function Dashboard() {
               </div>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{avgDaily}</div>
+              <div className="text-2xl font-bold">{loading ? "—" : avgDaily}</div>
               <p className="text-xs text-muted-foreground mt-1">Clicks per day</p>
             </CardContent>
           </Card>
@@ -348,6 +467,7 @@ export default function Dashboard() {
                         setSelectedFeature(
                           feature === selectedFeature ? null : feature
                         );
+                        trackClick("chart_bar");
                       }
                     }}
                     shape={(props: BarShapeProps) => {

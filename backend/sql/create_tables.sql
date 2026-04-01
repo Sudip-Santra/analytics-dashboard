@@ -2,10 +2,12 @@
 -- Product Analytics Dashboard - Database Schema
 -- ============================================
 
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
 -- 1. Users Table
 CREATE TABLE IF NOT EXISTS users (
-    id SERIAL PRIMARY KEY,
-    username VARCHAR(100) NOT NULL UNIQUE,
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    username VARCHAR(255) NOT NULL UNIQUE,
     password VARCHAR(255) NOT NULL,
     age INTEGER NOT NULL CHECK (age > 0 AND age < 150),
     gender VARCHAR(10) NOT NULL CHECK (gender IN ('Male', 'Female', 'Other')),
@@ -22,8 +24,8 @@ CREATE INDEX idx_users_created_at ON users (created_at);
 
 -- 2. Feature Clicks Table
 CREATE TABLE IF NOT EXISTS feature_clicks (
-    id SERIAL PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     feature_name VARCHAR(100) NOT NULL,
     timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
