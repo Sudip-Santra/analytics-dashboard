@@ -22,7 +22,7 @@ A full-stack product analytics dashboard that visualizes its own usage. Every ti
 
 ```
 ┌─────────────────────┐       ┌──────────────────────┐       ┌────────────┐
-│   React Frontend    │──────>│   FastAPI Backend     │──────>│ PostgreSQL │
+│   React Frontend    │──────>│   FastAPI Backend    │──────>│ PostgreSQL │
 │   (Vite, Port 5170) │<──────│   (Uvicorn, Port 5000│<──────│            │
 │                     │       │                      │       │            │
 │  - Login / Register │       │  POST /register      │       │  users     │
@@ -270,10 +270,10 @@ Alternatively, users can self-register via the `/register` page in the frontend.
 
 ```
 ┌──────────┐    POST /track     ┌──────────────┐   executemany    ┌────────────┐
-│  Browser  │──────────────────>│   FastAPI     │────────────────>│ PostgreSQL │
-│  (batch   │    (every 5s)     │   (uvicorn)   │                 │            │
-│   queue)  │                   │               │   SELECT + JOIN │            │
-│           │<──────────────────│               │<────────────────│            │
+│  Browser │──────────────────> │   FastAPI    │────────────────> │ PostgreSQL │
+│  (batch  │    (every 5s)      │   (uvicorn)  │                  │            │
+│   queue) │                    │              │   SELECT + JOIN  │            │
+│          │<────────────────── │              │<──────────────── │            │
 └──────────┘    GET /analytics  └──────────────┘   (live agg)     └────────────┘
                  (every 10s)
 ```
@@ -286,23 +286,23 @@ Alternatively, users can self-register via the `/register` page in the frontend.
 ### At Scale: 1 Million Writes/Min
 
 ```
-┌──────────┐   POST /track   ┌──────────┐  produce  ┌─────────────┐
-│  Browser  │───────────────>│  FastAPI  │─────────>│    Kafka /   │
-│  (batch)  │  202 Accepted  │  (p99<5ms)│          │ Redis Streams│
-└──────────┘   (fire & forget)└──────────┘          └──────┬──────┘
-                                                           │ consume
-                                                           │ (batches of 5-10K)
-                                                           v
-┌──────────┐  GET /analytics ┌──────────┐  refresh  ┌──────────────┐
-│  Browser  │<──────────────>│  FastAPI  │<────────>│  PostgreSQL   │
-│           │  (sub-100ms)   │ (read     │          │               │
-└──────────┘                 │  replica) │          │ Materialized  │
-                             └──────────┘          │ Views (60s)   │
-                                                   │               │
-                              ┌──────────┐  COPY   │ feature_clicks│
-                              │  Batch   │────────>│ (partitioned  │
-                              │  Worker  │         │  by month)    │
-                              └──────────┘         └───────────────┘
+┌──────────┐   POST /track   ┌───────────┐  produce  ┌──────────────┐
+│  Browser │───────────────> │  FastAPI  │─────────> │    Kafka /   │
+│  (batch) │  202 Accepted   │  (p99<5ms)│           │ Redis Streams│
+└──────────┘  (fire & forget)└───────────┘           └──────┬───────┘
+                                                            │ consume
+                                                            │ (batches of 5-10K)
+                                                            v
+┌───────────┐  GET /analytics ┌───────────┐  refresh ┌───────────────┐
+│  Browser  │<──────────────> │  FastAPI  │<────────>│  PostgreSQL   │
+│           │  (sub-100ms)    │ (read     │          │               │
+└───────────┘                 │  replica) │          │ Materialized  │
+                              └───────────┘          │ Views (60s)   │
+                                                     │               │
+                              ┌──────────┐  COPY     │ feature_clicks│
+                              │  Batch   │─────────> │ (partitioned  │
+                              │  Worker  │           │  by month)    │
+                              └──────────┘           └───────────────┘
 ```
 
 If this dashboard needed to handle 1 million write-events per minute, the architecture would evolve across three layers:
