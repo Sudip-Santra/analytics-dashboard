@@ -535,6 +535,7 @@ export default function Dashboard() {
                 <LineChart
                   data={dailyData}
                   margin={{ left: 0, right: 16, top: 8, bottom: 0 }}
+                  onClick={() => enqueueClick("chart_line")}
                 >
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                   <XAxis

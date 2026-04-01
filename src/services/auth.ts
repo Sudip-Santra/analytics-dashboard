@@ -12,6 +12,22 @@ interface MeResponse {
   gender: string;
 }
 
+interface RegisterPayload {
+  email: string;
+  password: string;
+  confirm_password: string;
+  age: number;
+  gender: string;
+}
+
+export async function register(payload: RegisterPayload) {
+  const { data } = await apiFetch<LoginResponse>("/register", {
+    method: "POST",
+    body: payload,
+  });
+  return data;
+}
+
 export async function login(email: string, password: string) {
   const { data } = await apiFetch<LoginResponse>("/login", {
     method: "POST",
